@@ -81,10 +81,12 @@ export function emptyFilm(title: string, year: number | null, uri: string | null
     onWatchlist: false,
     watchCount: 0,
     tmdbId: null,
+    wikidataId: null,
     posterUrl: null,
     runtime: null,
     genres: [],
     director: null,
+    releaseYear: null,
     hue: null,
     procedural: true,
   };

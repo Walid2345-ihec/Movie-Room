@@ -42,8 +42,8 @@ export class ImportScreen {
     });
 
     const keyNote = hasTmdbKey()
-      ? 'TMDB key detected — posters, directors and genres will be fetched and cached offline.'
-      : 'No TMDB key set: covers will be generated procedurally. Add VITE_TMDB_API_KEY to .env for real posters.';
+      ? 'TMDB key detected — posters, directors and genres come from TMDB (Wikipedia as fallback) and are cached offline.'
+      : 'Posters, directors, runtimes and genres are fetched from Wikipedia / Wikidata — no API key needed — and cached offline.';
 
     this.importBox = el(
       'div',

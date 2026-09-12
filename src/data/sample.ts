@@ -49,7 +49,7 @@ export function sampleFilms(): Film[] {
     f.rating = r.r;
     f.watchedDate = r.d;
     f.watchCount = 1;
-    // Director/genre/runtime are pre-filled so sorting works even with no TMDB key.
+    // Placeholder metadata; the provider lookup (Wikipedia/TMDB) overwrites it with real data.
     f.director = r.dir;
     f.genres = r.g;
     f.runtime = r.rt;

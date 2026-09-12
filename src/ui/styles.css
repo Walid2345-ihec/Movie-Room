@@ -24,6 +24,8 @@ button:hover { background: rgba(255, 255, 255, 0.12); }
 button.active { background: var(--accent); color: #1a1407; border-color: var(--accent); font-weight: 600; }
 button.primary { background: var(--accent); color: #1a1407; border-color: var(--accent); font-weight: 600; padding: 10px 16px; }
 button.primary:hover { filter: brightness(1.08); }
+button.danger { border-color: rgba(255, 110, 100, 0.5); color: #ff9d94; }
+button.danger:hover { background: rgba(255, 110, 100, 0.15); }
 input[type='text'], input[type='search'] {
   background: rgba(0, 0, 0, 0.35); border: 1px solid var(--panel-border); border-radius: 8px; padding: 7px 10px; outline: none; width: 200px;
 }
@@ -54,7 +56,8 @@ kbd { font-family: inherit; font-size: 10px; padding: 1px 5px; border-radius: 4p
 }
 .stats .stat { display: flex; flex-direction: column; min-width: 70px; }
 .stats .stat b { font-size: 16px; }
-.stats .stat span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.stats .stat span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+.stats .stat b[title] { cursor: help; text-decoration: underline dotted rgba(255,255,255,0.25); }
 
 /* ---- Toast ---- */
 .toast {

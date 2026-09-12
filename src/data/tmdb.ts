@@ -1,5 +1,8 @@
 /**
- * TMDB enrichment + IndexedDB cache + procedural cover fallback.
+ * Metadata + poster enrichment, IndexedDB cache, procedural cover fallback.
+ *
+ * Providers: Wikipedia/Wikidata (keyless, always available — see wikipedia.ts)
+ * and TMDB (used first when VITE_TMDB_API_KEY is set; higher-res posters).
  *
  *  - enrichFilms(): batched, rate-limited /search/movie + /movie/{id} lookups.
  *  - Metadata and poster blobs are cached in IndexedDB so a second launch is
@@ -8,12 +11,13 @@
  *    procedural cover drawn on a 2D canvas, so the room is never empty.
  */
 import type { Film, FilmMeta, ImportProgress } from '../types';
+import { lookupWikipedia } from './wikipedia';
 
 export const TMDB_KEY: string = (import.meta.env.VITE_TMDB_API_KEY as string | undefined)?.trim() ?? '';
 export const hasTmdbKey = (): boolean => TMDB_KEY.length > 0;
 
 const API = 'https://api.themoviedb.org/3';
-const IMG = 'https://image.tmdb.org/t/p/w342';
+const IMG = 'https://image.tmdb.org/t/p/w500';
 
 // ---------------------------------------------------------------------------
 // IndexedDB cache
@@ -93,6 +97,7 @@ interface Crew {
 }
 interface MovieResponse {
   id: number;
+  release_date?: string;
   runtime: number | null;
   genres?: { name: string }[];
   poster_path: string | null;
@@ -125,9 +130,19 @@ class RateLimiter {
     }
   }
 }
-const limiter = new RateLimiter(4, 120);
+const limiter = new RateLimiter(3, 150);
 
-async function tmdbFetch<T>(path: string, params: Record<string, string>): Promise<T | null> {
+/** Thrown for HTTP/network failures so they are never mistaken for "no match". */
+export class TmdbError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function tmdbFetch<T>(path: string, params: Record<string, string>): Promise<T> {
   const url = new URL(API + path);
   url.searchParams.set('api_key', TMDB_KEY);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -138,32 +153,74 @@ async function tmdbFetch<T>(path: string, params: Record<string, string>): Promi
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
-    if (!res.ok) return null;
+    if (res.status === 404) throw new TmdbError(404, 'not found');
+    if (!res.ok) throw new TmdbError(res.status, `TMDB ${res.status} for ${path}`);
     return (await res.json()) as T;
   }
-  return null;
+  throw new TmdbError(429, 'rate limited');
 }
 
+/** Try TMDB (if a key is configured), then Wikipedia/Wikidata. */
 async function lookupOne(film: Film): Promise<FilmMeta | null> {
+  let meta: FilmMeta | null = null;
+  let tmdbFailed = false;
+  if (hasTmdbKey()) {
+    try {
+      meta = await lookupTmdb(film);
+    } catch (e) {
+      if (e instanceof TmdbError && e.status === 401) throw e; // surfaced once by enrichFilms
+      tmdbFailed = true;
+      console.warn(`[TMDB] lookup failed for "${film.title}":`, e);
+    }
+  }
+  if (!meta) {
+    try {
+      meta = await lookupWikipedia(film);
+    } catch (e) {
+      console.warn(`[Wikipedia] lookup failed for "${film.title}":`, e);
+      throw e; // transient — don't cache as a miss
+    }
+    if (!meta) {
+      if (tmdbFailed) throw new Error('all providers failed');
+      console.warn(`[Wikipedia] no match for "${film.title}" (${film.year ?? 'no year'}) — using procedural cover`);
+    }
+  }
+  return meta;
+}
+
+async function lookupTmdb(film: Film): Promise<FilmMeta | null> {
   const params: Record<string, string> = { query: film.title, include_adult: 'false' };
   if (film.year) params.year = String(film.year);
   let search = await tmdbFetch<SearchResponse>('/search/movie', params);
-  let hit = search?.results?.[0];
+  let hit = search.results?.[0];
   if (!hit && film.year) {
     // Year mismatch between Letterboxd and TMDB is common; retry without it.
     search = await tmdbFetch<SearchResponse>('/search/movie', { query: film.title, include_adult: 'false' });
-    hit = search?.results?.[0];
+    hit = search.results?.[0];
   }
-  if (!hit) return null;
-  const movie = await tmdbFetch<MovieResponse>(`/movie/${hit.id}`, { append_to_response: 'credits' });
+  if (!hit) {
+    console.warn(`[TMDB] no match for "${film.title}" (${film.year ?? 'no year'}) — trying Wikipedia`);
+    return null;
+  }
+  // /movie/{id}?append_to_response=credits == /movie/{id} + /movie/{id}/credits in one call.
+  let movie: MovieResponse | null = null;
+  try {
+    movie = await tmdbFetch<MovieResponse>(`/movie/${hit.id}`, { append_to_response: 'credits' });
+  } catch (e) {
+    if (!(e instanceof TmdbError && e.status === 404)) throw e;
+  }
   const director = movie?.credits?.crew?.find((c) => c.job === 'Director')?.name ?? null;
   const posterPath = movie?.poster_path ?? hit.poster_path;
+  const release = movie?.release_date ?? hit.release_date ?? '';
+  const releaseYear = parseInt(release.slice(0, 4), 10);
   return {
     tmdbId: hit.id,
+    wikidataId: null,
     posterUrl: posterPath ? IMG + posterPath : null,
-    runtime: movie?.runtime ?? null,
+    runtime: movie?.runtime || null,
     genres: movie?.genres?.map((g) => g.name) ?? [],
     director,
+    releaseYear: Number.isFinite(releaseYear) ? releaseYear : null,
     hue: null,
     fetchedAt: Date.now(),
   };
@@ -171,10 +228,13 @@ async function lookupOne(film: Film): Promise<FilmMeta | null> {
 
 function applyMeta(film: Film, m: FilmMeta): void {
   film.tmdbId = m.tmdbId;
+  film.wikidataId = m.wikidataId ?? null;
   film.posterUrl = m.posterUrl;
   film.runtime = m.runtime ?? film.runtime;
   film.genres = m.genres.length ? m.genres : film.genres;
   film.director = m.director ?? film.director;
+  film.releaseYear = m.releaseYear ?? film.year;
+  if (film.year === null && m.releaseYear !== null) film.year = m.releaseYear;
   film.hue = m.hue;
   film.procedural = !m.posterUrl;
 }
@@ -190,31 +250,42 @@ export async function enrichFilms(films: Film[], onProgress: (p: ImportProgress)
 
   for (const f of films) {
     const cached = await idbGet<FilmMeta>(STORE_META, f.id);
-    if (cached) applyMeta(f, cached);
+    // A cached miss (no provider matched) is retried after a week.
+    const staleMiss = cached && cached.tmdbId === null && !cached.wikidataId && Date.now() - cached.fetchedAt > 7 * 864e5;
+    if (cached && !staleMiss) applyMeta(f, cached);
     else misses.push(f);
     done++;
     if (done % 25 === 0) onProgress({ done, total, label: 'Reading cache…' });
   }
 
-  if (!hasTmdbKey() || !misses.length) {
-    // Fallback: assign a deterministic hue so the rainbow sort still works.
+  if (!misses.length) {
     for (const f of films) if (f.hue === null) f.hue = hashHue(f.title);
-    onProgress({ done: total, total, label: hasTmdbKey() ? 'Ready' : 'No TMDB key — procedural covers' });
+    onProgress({ done: total, total, label: 'Ready' });
     return;
   }
 
   done = total - misses.length;
   const BATCH = 8;
+  let keyRejected = false;
   for (let i = 0; i < misses.length; i += BATCH) {
     const batch = misses.slice(i, i + BATCH);
     await Promise.all(
       batch.map((f) =>
         limiter.run(async () => {
           let meta: FilmMeta | null = null;
+          let transient = false; // network / auth / 5xx: don't cache, retry next launch
           try {
             meta = await lookupOne(f);
-          } catch {
-            meta = null;
+          } catch (e) {
+            if (e instanceof TmdbError && e.status === 401) {
+              if (!keyRejected) console.error('[TMDB] API key rejected (401) — check VITE_TMDB_API_KEY in .env. Falling back to Wikipedia.');
+              keyRejected = true;
+              try {
+                meta = await lookupWikipedia(f);
+              } catch {
+                transient = true;
+              }
+            } else transient = true;
           }
           if (meta) {
             if (meta.posterUrl) {
@@ -225,6 +296,9 @@ export async function enrichFilms(films: Film[], onProgress: (p: ImportProgress)
             await idbPut(STORE_META, f.id, meta);
           } else {
             f.hue = hashHue(f.title);
+            // Cache a genuine miss (search succeeded, zero results) so a reload
+            // doesn't re-query it; transient failures are left uncached.
+            if (!transient) await idbPut(STORE_META, f.id, { tmdbId: null, wikidataId: null, posterUrl: null, runtime: null, genres: [], director: null, releaseYear: null, hue: f.hue, fetchedAt: Date.now() } satisfies FilmMeta);
           }
           done++;
           onProgress({ done, total, label: `Matching "${f.title}"` });
@@ -232,7 +306,7 @@ export async function enrichFilms(films: Film[], onProgress: (p: ImportProgress)
       ),
     );
   }
-  onProgress({ done: total, total, label: 'Ready' });
+  onProgress({ done: total, total, label: keyRejected ? 'TMDB key rejected — used Wikipedia' : 'Ready' });
 }
 
 // ---------------------------------------------------------------------------

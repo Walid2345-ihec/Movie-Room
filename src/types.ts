@@ -22,10 +22,14 @@ export interface Film {
 
   // ---- Enriched from TMDB (or procedurally faked in fallback mode) ----
   tmdbId: number | null;
+  /** Wikidata entity (e.g. "Q47703") when matched through Wikipedia. */
+  wikidataId: string | null;
   posterUrl: string | null;
   runtime: number | null;
   genres: string[];
   director: string | null;
+  /** Release year from the provider (may differ from the Letterboxd year). */
+  releaseYear: number | null;
   /** Dominant hue (0..360) sampled from the poster; used by the rainbow sort. */
   hue: number | null;
   /** True when the cover was generated procedurally (no TMDB match / no key). */
@@ -35,27 +39,39 @@ export interface Film {
 /** Enrichment payload persisted in IndexedDB, keyed by Film.id. */
 export interface FilmMeta {
   tmdbId: number | null;
+  wikidataId: string | null;
   posterUrl: string | null;
   runtime: number | null;
   genres: string[];
   director: string | null;
+  releaseYear: number | null;
   hue: number | null;
   fetchedAt: number;
 }
 
-export type ShelfKind = 'wall' | 'bookcase' | 'stand';
+export type ShelfKind = 'gondola' | 'wall' | 'endcap';
 
-/** A shelf placed in the room on the snap grid. */
+/**
+ * One shelving unit in the store. Positions are metres in the room frame
+ * (origin at the room centre, Y up, +Z toward the entrance).
+ */
 export interface ShelfPlacement {
   id: string;
   kind: ShelfKind;
-  /** Grid cell coordinates (x along the back wall, z toward the camera). */
-  gx: number;
-  gz: number;
-  /** Rotation in quarter turns (0..3). */
+  x: number;
+  z: number;
+  /** Yaw in radians. The unit's shelves face local +Z (gondolas: both ±Z). */
   rot: number;
-  /** Height offset for wall shelves (metres). Ignored for floor units. */
-  y: number;
+  /** Number of 1 m bays along the unit. */
+  bays: number;
+}
+
+/** Procedurally generated store: room envelope + shelving units. */
+export interface StorePlan {
+  width: number;
+  depth: number;
+  height: number;
+  units: ShelfPlacement[];
 }
 
 export type SortMode = 'rating' | 'year' | 'director' | 'genre' | 'runtime' | 'hue' | 'title';
@@ -63,16 +79,19 @@ export type CameraMode = 'orbit' | 'walk';
 
 export interface RoomTheme {
   wall: string;
+  /** Shelving steel colour. */
   wood: string;
   floor: string;
 }
 
-/** Everything needed to rebuild the room exactly. Persisted to localStorage. */
+/** Everything needed to rebuild the store exactly. Persisted to localStorage. */
 export interface RoomLayout {
-  version: 1;
-  shelves: ShelfPlacement[];
-  /** filmId → global slot id ("shelfId:slotIndex"). */
+  version: 2;
+  plan: StorePlan;
+  /** filmId → global slot id ("unitId:slotIndex"). */
   assignments: Record<string, string>;
+  /** Films the user placed by hand; auto-arrange leaves them where they are. */
+  pinned: string[];
   cameraMode: CameraMode;
   theme: RoomTheme;
   sortMode: SortMode;

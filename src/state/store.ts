@@ -2,7 +2,8 @@
  * Typed application state with a tiny pub/sub and localStorage persistence.
  * The scene and the UI both subscribe to this; neither talks to the other directly.
  */
-import type { AppPhase, CameraMode, Film, ImportProgress, RoomLayout, RoomTheme, ShelfPlacement, SortMode } from '../types';
+import type { AppPhase, CameraMode, Film, ImportProgress, RoomLayout, RoomTheme, SortMode, StorePlan } from '../types';
+import { planStore } from '../scene/room';
 
 export interface AppState {
   phase: AppPhase;
@@ -20,30 +21,21 @@ export interface AppState {
 export type StateKey = keyof AppState;
 type Listener = (state: AppState, changed: Set<StateKey>) => void;
 
-const LS_LAYOUT = 'reelroom:layout:v1';
+const LS_LAYOUT = 'reelroom:layout:v2';
 const LS_FILMS = 'reelroom:films:v1';
 
-export const DEFAULT_THEME: RoomTheme = { wall: '#d9cbb8', wood: '#8a5a3c', floor: '#6b4a34' };
+/** Retail look: white walls, black powder-coated steel, pale tile. */
+export const DEFAULT_THEME: RoomTheme = { wall: '#f1f0ec', wood: '#1f1f22', floor: '#e2ded6' };
 
-/** Default furniture: one wide bookcase on the back wall, a wall shelf, a stand. */
-export function defaultShelves(): ShelfPlacement[] {
-  return [
-    { id: 'bookcase-a', kind: 'bookcase', gx: -2, gz: -4, rot: 0, y: 0 },
-    { id: 'bookcase-b', kind: 'bookcase', gx: 1, gz: -4, rot: 0, y: 0 },
-    { id: 'wall-a', kind: 'wall', gx: -4, gz: -2, rot: 1, y: 1.5 },
-    { id: 'wall-b', kind: 'wall', gx: -4, gz: 0, rot: 1, y: 1.5 },
-    { id: 'stand-a', kind: 'stand', gx: 3, gz: -1, rot: 3, y: 0 },
-  ];
-}
-
-export function defaultLayout(): RoomLayout {
-  return { version: 1, shelves: defaultShelves(), assignments: {}, cameraMode: 'orbit', theme: { ...DEFAULT_THEME }, sortMode: 'rating' };
+export function defaultLayout(filmCount = 0): RoomLayout {
+  return { version: 2, plan: planStore(filmCount), assignments: {}, pinned: [], cameraMode: 'orbit', theme: { ...DEFAULT_THEME }, sortMode: 'genre' };
 }
 
 function isLayout(v: unknown): v is RoomLayout {
   if (!v || typeof v !== 'object') return false;
   const o = v as Record<string, unknown>;
-  return o.version === 1 && Array.isArray(o.shelves) && typeof o.assignments === 'object' && typeof o.theme === 'object';
+  const plan = o.plan as Partial<StorePlan> | undefined;
+  return o.version === 2 && !!plan && Array.isArray(plan.units) && typeof plan.width === 'number' && typeof o.assignments === 'object' && typeof o.theme === 'object' && Array.isArray(o.pinned);
 }
 
 export function loadLayout(): RoomLayout | null {
@@ -152,14 +144,26 @@ class Store {
   setSortMode(sortMode: SortMode): void {
     this.patchLayout({ sortMode });
   }
+  setPinned(pinned: Iterable<string>): void {
+    this.patchLayout({ pinned: [...pinned] });
+  }
+  setPlan(plan: StorePlan): void {
+    this.patchLayout({ plan });
+  }
   resetLayout(): void {
-    const layout = defaultLayout();
+    const layout = defaultLayout(this.state.films.length);
     this.set({ layout });
     this.persistLayout(layout);
   }
   replaceLayout(layout: RoomLayout): void {
     this.set({ layout });
     this.persistLayout(layout);
+  }
+  /** Full wipe: films, layout, persisted keys. Leaves the app on the Import screen. */
+  clearAll(): void {
+    localStorage.removeItem(LS_LAYOUT);
+    localStorage.removeItem(LS_FILMS);
+    this.set({ films: [], layout: defaultLayout(), source: 'sample', inspectId: null, hoverId: null, search: '', progress: { done: 0, total: 0, label: '' }, phase: 'import' });
   }
 
   private persistLayout(layout: RoomLayout): void {

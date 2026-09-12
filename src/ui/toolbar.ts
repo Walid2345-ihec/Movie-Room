@@ -1,5 +1,5 @@
 /** Top toolbar: arrange, search, camera mode, room colours, shelves, persistence, snapshot. */
-import type { CameraMode, RoomTheme, ShelfKind, SortMode } from '../types';
+import type { CameraMode, RoomTheme, SortMode } from '../types';
 import { SORT_LABELS } from '../systems/layout';
 import { store } from '../state/store';
 import { button, el } from './dom';
@@ -9,12 +9,13 @@ export interface ToolbarHandlers {
   onSearch: (q: string) => void;
   onCameraMode: (m: CameraMode) => void;
   onTheme: (t: Partial<RoomTheme>) => void;
-  onAddShelf: (kind: ShelfKind) => void;
-  onRemoveShelf: () => void;
+  /** Clear every manual placement and re-run the current sort. */
+  onResortAll: () => void;
   onSnapshot: () => void;
   onExportLayout: () => void;
   onImportLayout: () => void;
-  onResetRoom: () => void;
+  onResetLayout: () => void;
+  onResetAll: () => void;
   onImportCollection: () => void;
 }
 
@@ -31,6 +32,9 @@ export class Toolbar {
       this.sortButtons.set(mode, b);
       sortGroup.append(b);
     }
+    const resort = button('Re-sort everything', h.onResortAll);
+    resort.title = 'Forget manual placements and lay every case out by the current sort';
+    sortGroup.append(resort);
 
     const search = el('input', { type: 'search', placeholder: 'Search title / director / genre…' });
     search.addEventListener('input', () => h.onSearch(search.value));
@@ -49,22 +53,14 @@ export class Toolbar {
     };
 
     const theme = store.get().layout.theme;
+    const colorInputs: [keyof RoomTheme, HTMLInputElement][] = [];
     const color = (key: keyof RoomTheme, title: string): HTMLInputElement => {
       const i = el('input', { type: 'color', value: theme[key], title });
       i.addEventListener('input', () => h.onTheme({ [key]: i.value }));
+      colorInputs.push([key, i]);
       return i;
     };
-    const colors = el('div', { class: 'group' }, el('label', { text: 'Room' }), color('wall', 'Wall colour'), color('wood', 'Wood colour'), color('floor', 'Floor colour'));
-
-    const shelfSel = el('select');
-    for (const [v, t] of [
-      ['bookcase', 'Bookcase'],
-      ['wall', 'Wall shelf'],
-      ['stand', 'Display stand'],
-    ] as const)
-      shelfSel.append(el('option', { value: v, text: t }));
-    shelfSel.style.cssText = 'background:rgba(0,0,0,.35);border:1px solid var(--panel-border);border-radius:8px;padding:5px;';
-    const shelves = el('div', { class: 'group' }, el('label', { text: 'Shelves' }), shelfSel, button('+ Add', () => h.onAddShelf(shelfSel.value as ShelfKind)), button('− Last', h.onRemoveShelf));
+    const colors = el('div', { class: 'group' }, el('label', { text: 'Store' }), color('wall', 'Wall colour'), color('wood', 'Shelving steel colour'), color('floor', 'Floor tile colour'));
 
     this.hint = el('span', { class: 'hint' });
 
@@ -76,10 +72,9 @@ export class Toolbar {
       el('div', { class: 'group' }, search),
       el('div', { class: 'group' }, el('label', { text: 'Camera' }), this.camButtons.orbit, this.camButtons.walk),
       colors,
-      shelves,
       el('div', { class: 'spacer' }),
       this.hint,
-      el('div', { class: 'group' }, button('📷 Snapshot', h.onSnapshot), button('Export layout', h.onExportLayout), button('Import layout', h.onImportLayout), button('Reset room', h.onResetRoom)),
+      el('div', { class: 'group' }, button('📷 Snapshot', h.onSnapshot), button('Export layout', h.onExportLayout), button('Import layout', h.onImportLayout), button('Reset layout', h.onResetLayout), button('Reset', h.onResetAll, 'danger')),
       el('div', { class: 'group' }, button('Import collection', h.onImportCollection, 'primary')),
     );
     parent.append(this.root);
@@ -88,6 +83,7 @@ export class Toolbar {
       if (changed.has('layout')) {
         this.setSort(s.layout.sortMode);
         this.setCamera(s.layout.cameraMode);
+        for (const [k, i] of colorInputs) if (i.value !== s.layout.theme[k]) i.value = s.layout.theme[k];
       }
       if (changed.has('phase')) this.root.classList.toggle('hidden', s.phase === 'import' || s.phase === 'loading');
     });
@@ -104,6 +100,6 @@ export class Toolbar {
     this.hint.innerHTML =
       mode === 'walk'
         ? '<kbd>WASD</kbd> move · mouse look · <kbd>Tab</kbd> orbit · <kbd>Esc</kbd> release mouse'
-        : 'drag to orbit · click a case · drag a case to re-shelve · <kbd>Tab</kbd> walk';
+        : 'drag to orbit · click a case to select · drag it to another slot · <kbd>Tab</kbd> walk';
   }
 }

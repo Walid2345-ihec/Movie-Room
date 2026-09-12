@@ -7,9 +7,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraMode } from '../types';
-import { ROOM_D, ROOM_H, ROOM_W } from '../scene/room';
 
 const EYE = 1.6;
+
+export interface Bounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  height: number;
+}
 const RADIUS = 0.25;
 const _v = new THREE.Vector3();
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -27,18 +34,21 @@ export class CameraSystem {
   private savedOrbit: { pos: THREE.Vector3; target: THREE.Vector3 } | null = null;
   onModeChange: ((m: CameraMode) => void) | null = null;
 
+  /** Default framing: standing at the entrance looking down the first aisle. */
+  home = { pos: new THREE.Vector3(0, 1.6, 2.5), target: new THREE.Vector3(0, 1.3, -2) };
+
   constructor(
     private readonly dom: HTMLCanvasElement,
     private readonly colliders: () => THREE.Box3[],
+    private readonly bounds: () => Bounds,
   ) {
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.05, 60);
-    this.camera.position.set(1.4, 1.7, 2.6);
     this.orbit = new OrbitControls(this.camera, dom);
-    this.orbit.target.set(-0.2, 1.2, -3.2);
+    this.resetView();
     this.orbit.enableDamping = true;
     this.orbit.dampingFactor = 0.08;
     this.orbit.minDistance = 0.3;
-    this.orbit.maxDistance = 9;
+    this.orbit.maxDistance = 12;
     this.orbit.maxPolarAngle = Math.PI * 0.52;
     this.orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     this.orbit.update();
@@ -48,6 +58,15 @@ export class CameraSystem {
     dom.addEventListener('pointermove', this.onPointerMove);
     dom.addEventListener('click', this.onClick);
     document.addEventListener('pointerlockchange', this.onLockChange);
+  }
+
+  /** Default orbit framing (also used by the full reset). */
+  resetView(): void {
+    this.camera.position.copy(this.home.pos);
+    this.orbit.target.copy(this.home.target);
+    this.savedOrbit = null;
+    this.velocity.set(0, 0, 0);
+    this.orbit.update();
   }
 
   /** Pointer in NDC, or screen centre when the pointer is locked (walk mode). */
@@ -133,8 +152,9 @@ export class CameraSystem {
   };
 
   private clampInside(p: THREE.Vector3): void {
-    p.x = THREE.MathUtils.clamp(p.x, -ROOM_W / 2 + RADIUS, ROOM_W / 2 - RADIUS);
-    p.z = THREE.MathUtils.clamp(p.z, -ROOM_D / 2 + RADIUS, ROOM_D / 2 - RADIUS);
+    const b = this.bounds();
+    p.x = THREE.MathUtils.clamp(p.x, b.minX + RADIUS, b.maxX - RADIUS);
+    p.z = THREE.MathUtils.clamp(p.z, b.minZ + RADIUS, b.maxZ - RADIUS);
   }
 
   /** AABB collision: move on X then Z separately so the player slides along obstacles. */
@@ -159,15 +179,16 @@ export class CameraSystem {
   update(dt: number): void {
     if (this.mode === 'orbit') {
       // Keep the orbit target inside the room so the camera can't fly through walls.
+      const b = this.bounds();
       const t = this.orbit.target;
-      t.x = THREE.MathUtils.clamp(t.x, -ROOM_W / 2 + 0.3, ROOM_W / 2 - 0.3);
-      t.z = THREE.MathUtils.clamp(t.z, -ROOM_D / 2 + 0.3, ROOM_D / 2 + 1.5);
-      t.y = THREE.MathUtils.clamp(t.y, 0.2, ROOM_H - 0.3);
+      t.x = THREE.MathUtils.clamp(t.x, b.minX + 0.3, b.maxX - 0.3);
+      t.z = THREE.MathUtils.clamp(t.z, b.minZ + 0.3, b.maxZ - 0.3);
+      t.y = THREE.MathUtils.clamp(t.y, 0.2, b.height - 0.3);
       this.orbit.update();
       const p = this.camera.position;
-      p.x = THREE.MathUtils.clamp(p.x, -ROOM_W / 2 + 0.15, ROOM_W / 2 - 0.15);
-      p.z = THREE.MathUtils.clamp(p.z, -ROOM_D / 2 + 0.15, ROOM_D / 2 + 2.5);
-      p.y = THREE.MathUtils.clamp(p.y, 0.25, ROOM_H - 0.1);
+      p.x = THREE.MathUtils.clamp(p.x, b.minX + 0.15, b.maxX - 0.15);
+      p.z = THREE.MathUtils.clamp(p.z, b.minZ + 0.15, b.maxZ - 0.15);
+      p.y = THREE.MathUtils.clamp(p.y, 0.25, b.height - 0.1);
       return;
     }
     // Walk mode

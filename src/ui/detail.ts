@@ -2,6 +2,7 @@
 import type { Film } from '../types';
 import { resolveCover } from '../data/tmdb';
 import { button, el, stars } from './dom';
+import { formatRuntime } from './stats';
 
 export class DetailPanel {
   readonly root: HTMLDivElement;
@@ -17,10 +18,11 @@ export class DetailPanel {
   async show(film: Film): Promise<void> {
     this.current = film.id;
     const cover = el('div');
-    const decade = film.year ? `${Math.floor(film.year / 10) * 10}s` : '';
+    const year = film.releaseYear ?? film.year;
+    const decade = year ? `${Math.floor(year / 10) * 10}s` : '';
     const rows: [string, string][] = [
       ['Director', film.director ?? '—'],
-      ['Runtime', film.runtime ? `${film.runtime} min` : '—'],
+      ['Runtime', formatRuntime(film.runtime)],
       ['Your rating', stars(film.rating)],
       ['Watched', film.watchedDate ?? (film.onWatchlist ? 'On watchlist' : '—')],
       ['Rewatches', film.watchCount > 1 ? String(film.watchCount - 1) : '0'],
@@ -28,7 +30,7 @@ export class DetailPanel {
     this.body.replaceChildren(
       cover,
       el('h2', { text: film.title }),
-      el('div', { class: 'meta', text: [film.year ? String(film.year) : '', decade, film.procedural ? 'procedural cover' : 'TMDB'].filter(Boolean).join(' · ') }),
+      el('div', { class: 'meta', text: [year ? String(year) : '', decade, film.tmdbId ? 'TMDB' : film.wikidataId ? 'Wikipedia' : 'no match — procedural cover'].filter(Boolean).join(' · ') }),
       el('div', { class: 'chips' }, ...film.genres.map((g) => el('span', { class: 'chip', text: g }))),
       ...rows.map(([k, v]) => el('div', { class: 'row' }, el('span', { text: k }), el('span', { class: k === 'Your rating' ? 'stars' : '', text: v }))),
       el(
